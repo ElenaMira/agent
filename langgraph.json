@@ -1,0 +1,8 @@
+
+{
+  "dependencies": ["."],
+  "graphs": {
+    "my_agent": "./lib/agent/LangGraph.ts:graph"
+  },
+  "env": ".env"
+}
