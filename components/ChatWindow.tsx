@@ -747,8 +747,8 @@ export function ChatWindow(props: {
 
           <div className="px-3 py-3 text-xs text-muted-foreground">
             {user
-              ? "已按当前登录用户隔离会话上下文。"
-              : "登录后会自动切换到该用户自己的上下文记录。"}
+              ? "你好。"
+              : "登录记录上下文。"}
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 pb-3">

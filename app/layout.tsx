@@ -19,7 +19,7 @@ export default function RootLayout({
     // lang="en" 表示英文
     <html lang="en">
       <head>
-        <title>LangChain + Next.js Template</title>
+        <title>LangChain + Next.js</title>
         {/* 提供一个favicon图标 rel:"shortcut icon"(表示快捷图标) href:图标路径 */}
         <link rel="shortcut icon" href="/images/favicon.ico" />
         <meta
@@ -56,23 +56,13 @@ export default function RootLayout({
               </div>
               <div className="flex gap-4 flex-col md:flex-row md:items-center">
                 <nav className="flex gap-1 flex-col md:flex-row order-2">
-                  {/* <ActiveLink href="/">🏴‍☠️ Chat</ActiveLink>
-                  <ActiveLink href="/structured_output">
-                    🧱 Structured Output
-                  </ActiveLink>
-                  <ActiveLink href="/agents">🦜 Agents</ActiveLink>
-                  <ActiveLink href="/retrieval">🐶 Retrieval</ActiveLink> */}
                   <ActiveLink href="/retrieval_agents">
                     🤖 Retrieval Agents
                   </ActiveLink>
-                  {/* <ActiveLink href="/ai_sdk">
-                    🌊 React Server Components
-                  </ActiveLink>
-                  <ActiveLink href="/langgraph">🕸️ LangGraph</ActiveLink> */}
                 </nav>
               </div>
               {/* 右边一列的排布 */}
-              {/* tode */}
+              {/* 顶部右侧：授权 */}
               <div className="flex justify-center">
                 <AuthMenu />
               </div>

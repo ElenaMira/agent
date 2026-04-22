@@ -4,7 +4,7 @@ import  { convertVercelMessageToLangChainMessage }  from "@/lib/converters/Input
 import { Message as VercelChatMessage} from "ai";
 import { BaseMessage } from "@langchain/core/messages";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {

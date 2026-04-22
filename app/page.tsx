@@ -4,6 +4,7 @@ import { ChatWindow } from "@/components/ChatWindow";
 export default function Home() {
   const InfoCard = (
       <ul>
+        <div>欢迎使用多模态平台</div>
       </ul>
 
   );

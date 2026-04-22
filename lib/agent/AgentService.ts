@@ -27,11 +27,11 @@ import { runRagAgentGraph,AgentState,StateType, runGenerateImageAgentGraph } fro
 //   }
 // }
 
-export const AgentType: Record<string, number> = {
-    GenerateImage: 0,
-    RagQuery: 1,
-    Default: 2,
-}
+export enum AgentType {
+    GenerateImage = 0,
+    RagQuery = 1,
+    Default = 2
+  }
 
 // 使用 Record<number, any> 或 Map 来缓存不同的编译图
 // 缓存结构：{ AgentType.RagQuery: compiledGraphInstance, ... }
