@@ -2,7 +2,8 @@
 
 import { type Message } from "ai";
 import { useChat } from "ai/react";
-import { useRef, useState } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { toast } from "sonner";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
@@ -10,7 +11,15 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { ChatMessageBubble } from "@/components/ChatMessageBubble";
 import { IntermediateStep } from "./IntermediateStep";
 import { Button } from "./ui/button";
-import { ArrowDown, LoaderCircle, Paperclip, X, FileText } from "lucide-react";
+import {
+  ArrowDown,
+  FileText,
+  LoaderCircle,
+  MessageSquareText,
+  Paperclip,
+  Plus,
+  X,
+} from "lucide-react";
 import { Checkbox } from "./ui/checkbox";
 import { UploadPicturesForm } from "./UploadPicturesForm";
 
@@ -22,7 +31,41 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "./ui/dialog";
-import { cn } from "@/utils/cn";
+import { cn } from "@/lib/utils/cn";
+import { useAuth } from "@/lib/auth/auth-context";
+
+type ChatSession = {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+const DEFAULT_SESSION_TITLE = "新对话";
+
+function createSession(): ChatSession {
+  const now = Date.now();
+  return {
+    id: crypto.randomUUID(),
+    title: DEFAULT_SESSION_TITLE,
+    messages: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function deriveSessionTitle(messages: Message[]) {
+  const firstUserMessage = messages.find(
+    (message) => message.role === "user" && message.content.trim().length > 0,
+  );
+
+  if (!firstUserMessage) {
+    return DEFAULT_SESSION_TITLE;
+  }
+
+  return firstUserMessage.content.trim().slice(0, 5) || DEFAULT_SESSION_TITLE;
+}
 
 // 聊天消息自定义组件
 // todo: 优化
@@ -62,7 +105,7 @@ export function ChatInput(props: {
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onStop?: () => void;
   value: string;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   loading?: boolean;
   placeholder?: string;
   children?: ReactNode;
@@ -237,9 +280,12 @@ function AttachmentsPreview(props: {
             className="relative rounded-md border border-input bg-secondary overflow-hidden"
           >
             {p.type === "image" ? (
-              <img
+              <Image
                 src={p.previewUrl}
                 alt={p.file.name}
+                width={112}
+                height={80}
+                unoptimized
                 className="h-20 w-28 object-cover"
               />
             ) : (
@@ -271,6 +317,7 @@ export function ChatWindow(props: {
   showIngestForm?: boolean;// 是否显示文档上传功能（可选）
   showIntermediateStepsToggle?: boolean;// 是否显示中间步骤开关（可选）
 }) {
+  const { user, loading: authLoading } = useAuth();
   // 使用状态管理是否显示中间步骤
   const [showIntermediateSteps, setShowIntermediateSteps] = useState(
     !!props.showIntermediateStepsToggle,//双!!强制转换为boolean类型
@@ -291,6 +338,14 @@ export function ChatWindow(props: {
     type: "image" | "pdf";
     shouldRevokePreview: boolean;
   }[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([createSession()]);
+  const [activeSessionId, setActiveSessionId] = useState<string>(sessions[0].id);
+  const hasLoadedSessionsRef = useRef(false);
+  const lastAppliedSessionIdRef = useRef<string | null>(null);
+  const storageKey = useMemo(
+    () => `chat-sessions:${user?.id ?? "guest"}`,
+    [user?.id],
+  );
 // 功能谁干的？你要不要写？
 // 收集 chat.messages,useChat 自动,不用
 // 把输入框内容加成最后一条 user 消息,useChat 自动,不用
@@ -338,6 +393,105 @@ export function ChatWindow(props: {
         description: e.message,
       }),
   });
+  const { handleInputChange, setInput, setMessages } = chat;
+  //安全释放Url
+  const safelyRevokeUrl = (url: string) => {
+    try {
+      URL.revokeObjectURL(url);// 释放
+    } catch {
+      // 忽略清理错误(一般为已经处理过了)
+    }
+  };
+
+  // 清除预览文件
+  const clearPreviewFiles = useCallback(() => {
+    setPreviewFiles((prev) => {
+      prev.forEach((file) => {
+        // 只释放预览图片的 URL
+        if (file.shouldRevokePreview) {
+          safelyRevokeUrl(file.previewUrl);
+        }
+      });
+      return [];
+    });
+  }, []);
+
+  useEffect(() => {
+    if (authLoading || typeof window === "undefined") return;
+
+    const rawSessions = window.localStorage.getItem(storageKey);
+
+    try {
+      const parsedSessions = rawSessions ? (JSON.parse(rawSessions) as ChatSession[]) : [];
+      const nextSessions = parsedSessions.length > 0 ? parsedSessions : [createSession()];
+      const nextActiveSession = nextSessions[0];
+
+      hasLoadedSessionsRef.current = true;
+      lastAppliedSessionIdRef.current = nextActiveSession.id;
+      setSessions(nextSessions);
+      setActiveSessionId(nextActiveSession.id);
+      setMessages(nextActiveSession.messages);
+      setSourcesForMessages({});
+      clearPreviewFiles();
+    } catch {
+      const fallbackSession = createSession();
+      hasLoadedSessionsRef.current = true;
+      lastAppliedSessionIdRef.current = fallbackSession.id;
+      setSessions([fallbackSession]);
+      setActiveSessionId(fallbackSession.id);
+      setMessages([]);
+      setSourcesForMessages({});
+      clearPreviewFiles();
+    }
+  }, [authLoading, clearPreviewFiles, setMessages, storageKey]);
+
+  useEffect(() => {
+    if (!hasLoadedSessionsRef.current || typeof window === "undefined") return;
+    window.localStorage.setItem(storageKey, JSON.stringify(sessions));
+  }, [sessions, storageKey]);
+
+  useEffect(() => {
+    if (!hasLoadedSessionsRef.current || !activeSessionId) return;
+    if (lastAppliedSessionIdRef.current === activeSessionId) {
+      lastAppliedSessionIdRef.current = null;
+      return;
+    }
+
+    setSessions((prev) =>
+      prev.map((session) =>
+        session.id === activeSessionId
+          ? {
+              ...session,
+              messages: chat.messages,
+              title: deriveSessionTitle(chat.messages),
+              updatedAt: Date.now(),
+            }
+          : session,
+      ),
+    );
+  }, [activeSessionId, chat.messages]);
+
+  const selectSession = (sessionId: string) => {
+    const targetSession = sessions.find((session) => session.id === sessionId);
+    if (!targetSession) return;
+
+    lastAppliedSessionIdRef.current = sessionId;
+    setActiveSessionId(sessionId);
+    setMessages(targetSession.messages);
+    setSourcesForMessages({});
+    clearPreviewFiles();
+  };
+
+  const createNewSession = () => {
+    const nextSession = createSession();
+    setSessions((prev) => [nextSession, ...prev]);
+    lastAppliedSessionIdRef.current = nextSession.id;
+    setActiveSessionId(nextSession.id);
+    setMessages([]);
+    setInput("");
+    setSourcesForMessages({});
+    clearPreviewFiles();
+  };
   //读取pdf文件内容并转换为data:url格式,提供给handleFiles显示预览
   const fileToDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -356,15 +510,6 @@ export function ChatWindow(props: {
     // 适用于图片、PDF 小预览等任何二进制文件
       reader.readAsDataURL(file);
     });
-  //安全释放Url
-  const safelyRevokeUrl = (url: string) => {
-    try {
-      URL.revokeObjectURL(url);// 释放
-    } catch {
-      // 忽略清理错误(一般为已经处理过了)
-    }
-  };
-
   // 处理图片/PDF 上传后的预览（支持多文件，限制 3 图 + 1 PDF）
   const handleFiles = async (files: File[]) => {
     const newPreviews: typeof previewFiles = [];
@@ -419,19 +564,6 @@ export function ChatWindow(props: {
         setPreviewFiles((prev) => [...prev, ...newPreviews]);
       }
   };
-  // 清除预览文件
-  const clearPreviewFiles = () => {
-    setPreviewFiles((prev) => {
-      prev.forEach((file) => {
-        // 只释放预览图片的 URL
-        if (file.shouldRevokePreview) {
-          safelyRevokeUrl(file.previewUrl);
-        }
-      });
-      return [];
-    });
-  };
-    
   // 粘贴事件
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     //1. 判断剪切板内是否有对象文件(包括图片,文件等)
@@ -598,92 +730,142 @@ export function ChatWindow(props: {
   }
   //布局组件（ChatLayout）：
   return (
-    <ChatLayout
-    //聊天区域
-      content={
-        // 判断是否为空
-        chat.messages.length === 0 ? (
-          <div>{props.emptyStateComponent}</div>
-        ) : (
-          <ChatMessages
-            aiEmoji={props.emoji} // 机器人图标
-            messages={chat.messages}// 聊天消息数组
-            emptyStateComponent={props.emptyStateComponent}// 空状态组件(就是空的时候显示什么)
-            sourcesForMessages={sourcesForMessages} //
-          />
-        )
-      }
-      // 底部输入框
-      footer={
-        // 用空组件来包裹,实现只有一个根元素
-        <>
-        {/* 预览区域：显示图片缩略图和 PDF 标识 */}
-        <AttachmentsPreview
-          files={previewFiles}
-          onRemove={(index) => { //index 是子组件 <AttachmentsPreview /> 主动传上来的(映射:选择文件第几个)
-            setPreviewFiles((prev) => {
-              const target = prev[index];
-              //判断是否可以删除
-              if (target?.shouldRevokePreview) {
-                safelyRevokeUrl(target.previewUrl);
-              }
-              return prev.filter((_, i) => i !== index); //删除数组的第index
-            });
-          }}
-        />
-
-        <ChatInput
-          value={chat.input}
-          onChange={chat.handleInputChange}
-          onSubmit={sendMessage}
-          loading={chat.isLoading || intermediateStepsLoading}
-          placeholder={props.placeholder ?? "What's it like to be a pirate?"}
-          textareaRef={textareaRef}
-          onPaste={handlePaste as any}
-          onDrop={handleDrop as any}
-        >
-          {props.showIngestForm && (
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className="pl-2 pr-3 -ml-2"
-                  disabled={chat.messages.length !== 0}
-                >
-                  <Paperclip className="size-4" />
-                  <span>Upload document</span>
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Upload document</DialogTitle>
-                  <DialogDescription>
-                    Upload a document to use for the chat.
-                  </DialogDescription>
-                </DialogHeader>
-                {/* 上传文档表单 */}
-                <UploadPicturesForm />
-              </DialogContent>
-            </Dialog>
-          )}
-
-          {props.showIntermediateStepsToggle && (
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="show_intermediate_steps"
-                name="show_intermediate_steps"
-                checked={showIntermediateSteps}
-                disabled={chat.isLoading || intermediateStepsLoading}
-                onCheckedChange={(e) => setShowIntermediateSteps(!!e)}
-              />
-              <label htmlFor="show_intermediate_steps" className="text-sm">
-                Show intermediate steps
-              </label>
+    <div className="grid h-full grid-rows-[auto,1fr] lg:grid-cols-[260px,1fr] lg:grid-rows-1">
+      <aside className="border-b border-input bg-secondary/40 lg:border-b-0 lg:border-r">
+        <div className="flex h-full flex-col">
+          <div className="flex items-center justify-between border-b border-input px-4 py-4">
+            <div>
+              <p className="text-sm font-semibold">对话上下文</p>
+              <p className="text-xs text-muted-foreground">
+                {user ? (user.email ?? "当前用户") : "游客模式"}
+              </p>
             </div>
-          )}
-        </ChatInput>
-        </>
-      }
-    />
+            <Button size="icon" variant="outline" onClick={createNewSession}>
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="px-3 py-3 text-xs text-muted-foreground">
+            {user
+              ? "已按当前登录用户隔离会话上下文。"
+              : "登录后会自动切换到该用户自己的上下文记录。"}
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-3 pb-3">
+            <div className="flex gap-2 overflow-x-auto pb-1 lg:flex-col">
+              {sessions
+                .slice()
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => selectSession(session.id)}
+                    className={cn(
+                      "flex min-w-[180px] items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors lg:min-w-0",
+                      session.id === activeSessionId
+                        ? "border-primary bg-background shadow-sm"
+                        : "border-transparent bg-background/70 hover:border-input hover:bg-background",
+                    )}
+                  >
+                    <MessageSquareText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{session.title}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {session.messages.length > 0
+                          ? `${session.messages.length} 条消息`
+                          : "还没有消息"}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div className="relative min-h-0">
+        <ChatLayout
+          content={
+            chat.messages.length === 0 ? (
+              <div>{props.emptyStateComponent}</div>
+            ) : (
+              <ChatMessages
+                aiEmoji={props.emoji}
+                messages={chat.messages}
+                emptyStateComponent={props.emptyStateComponent}
+                sourcesForMessages={sourcesForMessages}
+              />
+            )
+          }
+          footer={
+            <>
+              <AttachmentsPreview
+                files={previewFiles}
+                onRemove={(index) => {
+                  setPreviewFiles((prev) => {
+                    const target = prev[index];
+                    if (target?.shouldRevokePreview) {
+                      safelyRevokeUrl(target.previewUrl);
+                    }
+                    return prev.filter((_, i) => i !== index);
+                  });
+                }}
+              />
+
+              <ChatInput
+                value={chat.input}
+                onChange={handleInputChange}
+                onSubmit={sendMessage}
+                loading={chat.isLoading || intermediateStepsLoading}
+                placeholder={props.placeholder ?? "What's it like to be a pirate?"}
+                textareaRef={textareaRef}
+                onPaste={handlePaste}
+                onDrop={handleDrop}
+              >
+                {props.showIngestForm && (
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        className="pl-2 pr-3 -ml-2"
+                        disabled={chat.messages.length !== 0}
+                      >
+                        <Paperclip className="size-4" />
+                        <span>Upload document</span>
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Upload document</DialogTitle>
+                        <DialogDescription>
+                          Upload a document to use for the chat.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <UploadPicturesForm />
+                    </DialogContent>
+                  </Dialog>
+                )}
+
+                {props.showIntermediateStepsToggle && (
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="show_intermediate_steps"
+                      name="show_intermediate_steps"
+                      checked={showIntermediateSteps}
+                      disabled={chat.isLoading || intermediateStepsLoading}
+                      onCheckedChange={(e) => setShowIntermediateSteps(!!e)}
+                    />
+                    <label htmlFor="show_intermediate_steps" className="text-sm">
+                      Show intermediate steps
+                    </label>
+                  </div>
+                )}
+              </ChatInput>
+            </>
+          }
+        />
+      </div>
+    </div>
   );
 }

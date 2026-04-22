@@ -1,6 +1,6 @@
 // src/components/ChatMessageBubble.tsx
 import { Message } from "ai/react";
-import { cn } from "@/utils/cn";
+import { cn } from "@/lib/utils/cn";
 import { useMemo } from "react"; // 确保引入 useMemo
 
 interface ChatMessageBubbleProps {

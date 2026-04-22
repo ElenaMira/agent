@@ -12,6 +12,7 @@ import {
   BytesOutputParser,
   StringOutputParser,
 } from "@langchain/core/output_parsers";
+import { supabaseClient } from "@/lib/supabase/client"; 
 
 export const runtime = "edge";
 
@@ -93,12 +94,8 @@ export async function POST(req: NextRequest) {
       temperature: 0.2,
     });
     //3. 连接 Supabase + 初始化向量存储
-    const client = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_PRIVATE_KEY!,
-    );
     const vectorstore = new SupabaseVectorStore(new OpenAIEmbeddings(), {
-      client,
+      client:supabaseClient,
       tableName: "documents",
       queryName: "match_documents",//RPC调用（SQL function）
     });
