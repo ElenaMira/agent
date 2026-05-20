@@ -1,6 +1,5 @@
 import "./globals.css";
 import { Public_Sans } from "next/font/google";
-import { ActiveLink } from "@/components/Navbar";
 import { AuthMenu } from "@/components/auth/auth-menu";
 import { Toaster } from "@/components/ui/sonner";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
@@ -45,35 +44,22 @@ export default function RootLayout({
         {/* 提供一个NuqsAdapter组件,用于处理URL查询参数 */}
         <NuqsAdapter>
           {/* 授权 */}
-        <AuthProvider>
-          {/*  第一行：导航栏（auto(由内容决定高度)）第二行：主要区域（1fr - 填满剩余空间）dvh:动态可视高度为100% */}
-          <div className="bg-secondary grid grid-rows-[auto,1fr] h-[100dvh]">
-            {/* 一:头部区域的布局 */}
-            <div className="flex grid-cols-[1fr,auto] gap-2 justify-between p-4">
-              {/* 左边一列的排布*/}
-              {/* 导航栏: flex-col:移动端垂直排列（flex-col） md:flex-row:水平排列 */}
-              <div className="flex gap-4 flex-col md:flex-row md:items-center">
-              </div>
-              <div className="flex gap-4 flex-col md:flex-row md:items-center">
-                <nav className="flex gap-1 flex-col md:flex-row order-2">
-                  <ActiveLink href="/retrieval_agents">
-                    🤖 Retrieval Agents
-                  </ActiveLink>
-                </nav>
-              </div>
-              {/* 右边一列的排布 */}
-              {/* 顶部右侧：授权 */}
-              <div className="flex justify-center">
-                <AuthMenu />
+          <AuthProvider>
+            <div className="h-[100dvh] bg-secondary p-4">
+              <div className="grid h-full grid-rows-[auto,1fr] gap-0">
+                <aside className="rounded-t-2xl border border-input border-b-0 bg-background/70 p-3 lg:p-4">
+                  <div className="flex items-center justify-end">
+                    <AuthMenu />
+                  </div>
+                </aside>
+
+                <div className="relative min-h-0 rounded-b-2xl border border-input bg-background">
+                  <div className="absolute inset-0">{children}</div>
+                </div>
               </div>
             </div>
-            {/* 二:主体的布局 */}
-            <div className="bg-background mx-4 relative grid rounded-t-2xl border border-input border-b-0">
-              <div className="absolute inset-0">{children}</div>
-            </div>
-          </div>
-          {/* 组件库内的组件: 主要用于确认主题(System) */}
-          <Toaster />
+            {/* 组件库内的组件: 主要用于确认主题(System) */}
+            <Toaster />
           </AuthProvider>
         </NuqsAdapter>
       </body>

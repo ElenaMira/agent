@@ -9,13 +9,7 @@ import { CondenseQuestionTool } from "../tools/CondenseQuestionTool";
 import { AnswerTool } from "../tools/AnswerTool";
 import { ChatTool } from "../tools/ChatTool";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { SystemMessage, BaseMessage } from "@langchain/core/messages";
-
-import {
-  ChatPromptTemplate,
-  MessagesPlaceholder,
-} from "@langchain/core/prompts";
-
+import { BaseMessage } from "@langchain/core/messages";
 
 //1. 不能直接要求Agent只能使用所有工具(不然会迭代)
 const toolPrompt = `
@@ -92,8 +86,10 @@ CondenseQuestionTool → RagQueryTool
 
 顺序执行，不得跳过步骤。
 `;
-let finalTools:any =""
-export async function buildExecutionAgent(selectedTools: string[]) {
+export async function buildExecutionAgent(
+  selectedTools: string[],
+  systemPrompt?: string,
+) {
   try {
     const toolMap: Record<string, any> = {
       imageAnalysisTool: imageAnalysisTool,
@@ -107,29 +103,17 @@ export async function buildExecutionAgent(selectedTools: string[]) {
       ChatTool: ChatTool,
   };
   // 过滤出选中的工具
-  finalTools = selectedTools.map(t => toolMap[t]).filter(Boolean);
+  const finalTools = selectedTools.map(t => toolMap[t]).filter(Boolean);
+  const finalSystemPrompt = [systemPrompt, toolPrompt].filter(Boolean).join("\n\n");
 
-  // 将您的工具规则、RAG 流程等作为增强的 SystemMessage
-  const augmentedSystemMessage = new SystemMessage(toolPrompt);
-
-  // 使用 MessagesPlaceholder 来插入 LangChain 内部的 ReAct Scratchpad。
-  // {agent_scratchpad} 是 createReactAgent 约定用来插入 Thought/Action/Observation 历史的。
-  const reactPromptTemplate = ChatPromptTemplate.fromMessages([
-    augmentedSystemMessage, // <-- 插入您的自定义规则
-    new MessagesPlaceholder("chat_history"), // <-- 确保您的 chatHistory 被正确处理
-    ["user", "{messages}"],
-    new MessagesPlaceholder("agent_scratchpad"), // <-- ⚠️ 这是关键！
-  ]);
   return createReactAgent({
     llm: new ChatOpenAI({
-      // model: "gpt-5.1-chat-latest",
       model: "gpt-4o",
-      // model:"gpt-4o-mini",
       temperature: 0,
       maxTokens: 4096,
     }),
-    tools:finalTools,
-    prompt: reactPromptTemplate,
+    tools: finalTools,
+    prompt: finalSystemPrompt,
   });
   }catch(error){
     console.error("失败:", error);

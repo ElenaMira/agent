@@ -1,6 +1,6 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { BaseMessage } from "@langchain/core/messages";
-import { Select_SYSTEM_PROMPT } from "./Prompt";
+import { Select_SYSTEM_PROMPT } from "../prompt/Prompt";
 
 export class SelectAgentService {
   private routerModel = new ChatOpenAI({
@@ -18,7 +18,14 @@ export class SelectAgentService {
     // AIMessage result
     const raw = result.content.toString().trim().toLowerCase();
 
-    if (["chat","vision","image_generation","rag","web_search"].includes(raw)) {
+    if ([
+      "chattool",
+      "imageanalysistool",
+      "generateimagetool",
+      "ragquerytool",
+      "web_search",
+      "calculator",
+    ].includes(raw)) {
       return raw;
     }
 

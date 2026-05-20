@@ -20,13 +20,12 @@ export const imageAnalysisFunc = async (input: { image: string; prompt?: string;
       role: "user",
       content: [
           { type: "input_text", text: prompt || "请分析图片内容" },// 提供默认提示
-          { type: "input_image", image_url: image, detail: 'auto' },
+          { type: "input_image", image_url: image, detail: detail || "auto" },
         ],
       }]});
-    if (result.output_text) {
-      return Error("图片分析失败:" + result.output_text)
+    if (!result.output_text) {
+      throw new Error("图片分析失败: 模型未返回识别结果");
     }
-    console.log(result.output_text)
     return {
       analysis: result.output_text + "\n" + "图片分析成功,以上为图片分析结果",
     };
@@ -52,13 +51,12 @@ export const imageAnalysisLogic = async (input: { image_url: string; prompt?: st
       role: "user",
       content: [
           { type: "input_text", text: prompt || "请分析图片内容" },// 提供默认提示
-          { type: "input_image", image_url: image_url, detail: 'auto' },
+          { type: "input_image", image_url: image_url, detail: "auto" },
         ],
       }]});
-    if (result.output_text) {
-      return Error("图片分析失败:" + result.output_text)
+    if (!result.output_text) {
+      throw new Error("图片分析失败: 模型未返回识别结果");
     }
-    console.log("图片分析成功")
     return {
       analysis: result.output_text + "\n" + "图片分析成功,以上为图片分析结果",
     };

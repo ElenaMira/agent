@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import DEFAULT_RETRIEVAL_TEXT from "@/public/data/DefaultRetrievalText";
 import { Button } from "./ui/button";
-import { Textarea } from "./ui/textarea";
 
 export const runtime = "nodejs";
 // 俩个属性
@@ -26,24 +24,32 @@ export function UploadDocumentsForm() {
 
     setIsLoading(true);
 
-    const formData = new FormData();
-    formData.append("file", file);
-    const response = await fetch("/api/retrieval/ingest/pdf", {
-      method: "POST",
-      // body: JSON.stringify({
-      //   text: formData,
-      // }),
-      body: formData, // 直接发送 FormData 对象
-    });
-    if (response.status === 200) {
-      setDocument("Uploaded!");
-    } else {
-      const json = await response.json();
-      if (json.error) {
-        setDocument(json.error);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/tools/pdf", {
+        method: "POST",
+        body: formData,
+      });
+
+      const contentType = response.headers.get("content-type") ?? "";
+      const isJson = contentType.includes("application/json");
+      const payload = isJson ? await response.json() : null;
+
+      if (response.ok) {
+        setDocument("上传成功");
+      } else {
+        const errorMessage =
+          (payload && typeof payload.error === "string" && payload.error) ||
+          `上传失败（HTTP ${response.status}）`;
+        setDocument(errorMessage);
       }
+    } catch (error: any) {
+      setDocument(error?.message ?? "上传失败，请稍后重试");
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
   return (
     <form onSubmit={ingest} className="flex flex-col gap-4 w-full">

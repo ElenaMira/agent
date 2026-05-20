@@ -9,7 +9,6 @@ import { toast } from "sonner";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 import { ChatMessageBubble } from "@/components/ChatMessageBubble";
-import { IntermediateStep } from "./IntermediateStep";
 import { Button } from "./ui/button";
 import {
   ArrowDown,
@@ -18,10 +17,9 @@ import {
   MessageSquareText,
   Paperclip,
   Plus,
+  Trash2,
   X,
 } from "lucide-react";
-import { Checkbox } from "./ui/checkbox";
-import { UploadPicturesForm } from "./UploadPicturesForm";
 
 import {
   Dialog,
@@ -33,6 +31,7 @@ import {
 } from "./ui/dialog";
 import { cn } from "@/lib/utils/cn";
 import { useAuth } from "@/lib/auth/auth-context";
+import { UploadDocumentsForm } from "./UploadDocumentsForm";
 
 type ChatSession = {
   id: string;
@@ -76,22 +75,57 @@ function ChatMessages(props: {
   aiEmoji?: string;
   className?: string;
 }) {
+  const normalizeAssistantMessage = (message: Message): Message => {
+    if (message.role !== "assistant" || typeof message.content !== "string") {
+      return message;
+    }
+
+    const content = message.content.trim();
+    if (!content.startsWith("{") || !content.endsWith("}")) {
+      return message;
+    }
+
+    try {
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.messages)) {
+        return message;
+      }
+
+      const lastAssistant = [...parsed.messages]
+        .reverse()
+        .find((item: any) => item?.role === "assistant");
+
+      if (!lastAssistant || typeof lastAssistant.content !== "string") {
+        return message;
+      }
+
+      return {
+        ...message,
+        content: lastAssistant.content,
+        experimental_attachments:
+          Array.isArray(lastAssistant.experimental_attachments) &&
+          lastAssistant.experimental_attachments.length > 0
+            ? lastAssistant.experimental_attachments
+            : message.experimental_attachments,
+      };
+    } catch {
+      return message;
+    }
+  };
+
   return (
     <div className="flex flex-col max-w-[768px] mx-auto pb-12 w-full">
       {/* //遍历消息m */}
       {props.messages.map((m, i) => {
-        // 如果为系统消息
-        if (m.role === "system") {
-          //展现思考过程
-          return <IntermediateStep key={m.id} message={m} />;
-        }
+        if (m.role === "system") return null;
+        const displayMessage = normalizeAssistantMessage(m);
         // 其他消息
         // 尾部第一条消息 =  (总长度 - 1 - 当前位置),只适用于一次对话测试
         const sourceKey = (props.messages.length - 1 - i).toString();
         return (
           <ChatMessageBubble
             key={m.id}
-            message={m}
+            message={displayMessage}
             aiEmoji={props.aiEmoji}
             sources={props.sourcesForMessages[sourceKey]}
           />
@@ -157,7 +191,11 @@ export function ChatInput(props: {
               // 按回车发送（不换行），Shift+回车换行
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                props.onSubmit(e as any);
+                if (props.loading) {
+                  props.onStop?.();
+                } else {
+                  props.onSubmit(e as any);
+                }
               }
             }}
             onPaste={props.onPaste}        // ← 新增：粘贴事件
@@ -315,16 +353,35 @@ export function ChatWindow(props: {
   emptyStateComponent: ReactNode;// 空状态显示组件(空状态下的提示信息)
   emoji?: string;// AI头像emoji（可选）
   showIngestForm?: boolean;// 是否显示文档上传功能（可选）
-  showIntermediateStepsToggle?: boolean;// 是否显示中间步骤开关（可选）
 }) {
   const { user, loading: authLoading } = useAuth();
-  // 使用状态管理是否显示中间步骤
-  const [showIntermediateSteps, setShowIntermediateSteps] = useState(
-    !!props.showIntermediateStepsToggle,//双!!强制转换为boolean类型
+  const trimMessagesRequest = useCallback(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.body || typeof init.body !== "string") {
+        return fetch(input, init);
+      }
+
+      try {
+        const parsed = JSON.parse(init.body);
+        const lastMessage = Array.isArray(parsed.messages)
+          ? parsed.messages[parsed.messages.length - 1]
+          : undefined;
+
+        const nextBody = JSON.stringify({
+          ...parsed,
+          messages: lastMessage ? [lastMessage] : [],
+        });
+
+        return fetch(input, {
+          ...init,
+          body: nextBody,
+        });
+      } catch {
+        return fetch(input, init);
+      }
+    },
+    [],
   );
-  // 使用状态管理是否显示中间步骤加载状态
-  const [intermediateStepsLoading, setIntermediateStepsLoading] =
-    useState(false);
   // 使用状态管理消息来源
   const [sourcesForMessages, setSourcesForMessages] = useState<
     Record<string, any>// 消息来源记录(泛型)
@@ -361,6 +418,10 @@ export function ChatWindow(props: {
 // chat.isLoading,是否在请求中,显示“AI 正在思考...”
   const chat = useChat({
     api: props.endpoint,
+    body: {
+      userId: user?.id,
+    },
+    fetch: trimMessagesRequest,
     // 处理响应
     onResponse(response) {
       // 提取消息源:x-sources（RAG 来源）  后端返回格式x-sources: base64(JSON.stringify([{page:1,chunk:"..."}]))
@@ -492,6 +553,46 @@ export function ChatWindow(props: {
     setSourcesForMessages({});
     clearPreviewFiles();
   };
+
+  const deleteSession = (sessionId: string) => {
+    if (sessions.length <= 1) {
+      const resetSession = createSession();
+      setSessions([resetSession]);
+      lastAppliedSessionIdRef.current = resetSession.id;
+      setActiveSessionId(resetSession.id);
+      setMessages([]);
+      setInput("");
+      setSourcesForMessages({});
+      clearPreviewFiles();
+      return;
+    }
+
+    const sortedSessions = sessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const targetIndex = sortedSessions.findIndex((session) => session.id === sessionId);
+    const fallbackSession =
+      sortedSessions[targetIndex + 1] ??
+      sortedSessions[targetIndex - 1] ??
+      sortedSessions[0];
+
+    setSessions((prev) => prev.filter((session) => session.id !== sessionId));
+
+    if (sessionId !== activeSessionId) {
+      return;
+    }
+
+    if (!fallbackSession) {
+      return;
+    }
+
+    lastAppliedSessionIdRef.current = fallbackSession.id;
+    setActiveSessionId(fallbackSession.id);
+    setMessages(fallbackSession.messages);
+    setInput("");
+    setSourcesForMessages({});
+    clearPreviewFiles();
+  };
   //读取pdf文件内容并转换为data:url格式,提供给handleFiles显示预览
   const fileToDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -603,7 +704,7 @@ export function ChatWindow(props: {
   async function sendMessage(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (chat.isLoading || intermediateStepsLoading) return;
+    if (chat.isLoading) return;
 
     const trimmedInput = chat.input.trim();
     const hasText = trimmedInput.length > 0;
@@ -611,7 +712,6 @@ export function ChatWindow(props: {
 
     if (!hasText && !hasFiles) return;
 
-    const normalizedContent = hasText ? chat.input : "";
     //把用户预览中的所有文件，转成(map) Vercel AI SDK 要求的附件格式（数组） 
     const attachmentsForRequest = previewFiles.map((file) => ({
       name: file.file.name,//获取文件名
@@ -625,108 +725,10 @@ export function ChatWindow(props: {
       textareaRef.current.style.height = "auto";
     }
 
-    if (!showIntermediateSteps) {
-      // 1. 手动触发提交（不走默认的 form submit）
-      chat.handleSubmit(e, {
-        // 2. 把图片/PDF 作为附件发出去
-        experimental_attachments: attachmentsForRequest,
-        // 3.允许空文本提交
-        allowEmptySubmit: hasFiles && !hasText,
-      });
-      return;
-    }
-
-    //构建用户信息
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: normalizedContent,
-      ...(attachmentsForRequest.length > 0 && {
-        experimental_attachments: attachmentsForRequest,
-      }),
-    };
-
-    const messagesWithUserReply = [...chat.messages, userMessage];
-    chat.setMessages(messagesWithUserReply);
-    chat.setInput("");
-
-    setIntermediateStepsLoading(true);
-    try {
-      const response = await fetch(props.endpoint, {
-        method: "POST",
-        body: JSON.stringify({
-          messages: messagesWithUserReply, // ← 包含刚刚的 userMessage
-          show_intermediate_steps: true,
-        }),
-      });
-      const json = await response.json();
-
-      if (!response.ok) {
-        toast.error(`Error while processing your request`, {
-          description: json.error,
-        });
-        return;
-      }
-      //响应处理
-      const responseMessages: Message[] = json.messages ?? [];
-      if (!responseMessages.length) {
-        toast.error("接收到的响应为空");
-        return;
-      }
-      const toolCallMessages = responseMessages.filter(
-        (responseMessage: Message) =>
-          (responseMessage.role === "assistant" &&
-            !!responseMessage.toolInvocations?.length) ||
-          responseMessage.role === "tool",
-      );
-
-      const intermediateStepMessages: Message[] = [];
-      for (let i = 0; i < toolCallMessages.length; i += 2) {
-        const aiMessage = toolCallMessages[i];
-        const toolMessage = toolCallMessages[i + 1];
-
-        if (!aiMessage || !toolMessage) {
-          continue;
-        }
-
-        if (toolMessage.role !== "tool") {
-          continue;
-        }
-
-        intermediateStepMessages.push({
-          id: (messagesWithUserReply.length + i / 2).toString(),
-          role: "system" as const,
-          content: JSON.stringify({
-            action: aiMessage.toolInvocations?.[0], //只取第一条
-            observation: toolMessage.content,
-          }),
-        });
-      }
-
-      const newMessages = [...messagesWithUserReply];
-      for (const message of intermediateStepMessages) {
-        newMessages.push(message);
-        chat.setMessages([...newMessages]);
-        await new Promise((resolve) =>
-          setTimeout(resolve, 1000 + Math.random() * 1000),
-        );
-      }
-
-      chat.setMessages([
-        ...newMessages,
-        {
-          id: newMessages.length.toString(),
-          content: responseMessages[responseMessages.length - 1].content,
-          role: "assistant",
-        },
-      ]);
-    } catch (error: any) {
-      toast.error(`Error while processing your request`, {
-        description: error?.message ?? "Unknown error",
-      });
-    } finally {
-      setIntermediateStepsLoading(false);
-    }
+    chat.handleSubmit(e, {
+      experimental_attachments: attachmentsForRequest,
+      allowEmptySubmit: hasFiles && !hasText,
+    });
   }
   //布局组件（ChatLayout）：
   return (
@@ -735,7 +737,7 @@ export function ChatWindow(props: {
         <div className="flex h-full flex-col">
           <div className="flex items-center justify-between border-b border-input px-4 py-4">
             <div>
-              <p className="text-sm font-semibold">对话上下文</p>
+              <p className="text-sm font-semibold">新增对话</p>
               <p className="text-xs text-muted-foreground">
                 {user ? (user.email ?? "当前用户") : "游客模式"}
               </p>
@@ -747,8 +749,8 @@ export function ChatWindow(props: {
 
           <div className="px-3 py-3 text-xs text-muted-foreground">
             {user
-              ? "你好。"
-              : "登录记录上下文。"}
+              ? "对话管理"
+              : "对话管理"}
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 pb-3">
@@ -757,27 +759,41 @@ export function ChatWindow(props: {
                 .slice()
                 .sort((a, b) => b.updatedAt - a.updatedAt)
                 .map((session) => (
-                  <button
+                  <div
                     key={session.id}
-                    type="button"
-                    onClick={() => selectSession(session.id)}
                     className={cn(
-                      "flex min-w-[180px] items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors lg:min-w-0",
+                      "flex min-w-[180px] items-center gap-2 rounded-xl border px-2 py-2 transition-colors lg:min-w-0",
                       session.id === activeSessionId
                         ? "border-primary bg-background shadow-sm"
                         : "border-transparent bg-background/70 hover:border-input hover:bg-background",
                     )}
                   >
-                    <MessageSquareText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{session.title}</div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {session.messages.length > 0
-                          ? `${session.messages.length} 条消息`
-                          : "还没有消息"}
+                    <button
+                      type="button"
+                      onClick={() => selectSession(session.id)}
+                      className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1 py-1 text-left"
+                    >
+                      <MessageSquareText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{session.title}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {session.messages.length > 0
+                            ? `${session.messages.length} 条消息`
+                            : "还没有消息"}
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => deleteSession(session.id)}
+                      aria-label="删除会话"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 ))}
             </div>
           </div>
@@ -817,11 +833,29 @@ export function ChatWindow(props: {
                 value={chat.input}
                 onChange={handleInputChange}
                 onSubmit={sendMessage}
-                loading={chat.isLoading || intermediateStepsLoading}
+                onStop={chat.stop}
+                loading={chat.isLoading}
                 placeholder={props.placeholder ?? "What's it like to be a pirate?"}
                 textareaRef={textareaRef}
                 onPaste={handlePaste}
                 onDrop={handleDrop}
+                actions={
+                  chat.isLoading ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground animate-pulse">
+                        思考中 ♦ ♦ ♦
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={chat.stop}
+                      >
+                        立即终止
+                      </Button>
+                    </div>
+                  ) : null
+                }
               >
                 {props.showIngestForm && (
                   <Dialog>
@@ -842,25 +876,11 @@ export function ChatWindow(props: {
                           Upload a document to use for the chat.
                         </DialogDescription>
                       </DialogHeader>
-                      <UploadPicturesForm />
+                      <UploadDocumentsForm />
                     </DialogContent>
                   </Dialog>
                 )}
 
-                {props.showIntermediateStepsToggle && (
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="show_intermediate_steps"
-                      name="show_intermediate_steps"
-                      checked={showIntermediateSteps}
-                      disabled={chat.isLoading || intermediateStepsLoading}
-                      onCheckedChange={(e) => setShowIntermediateSteps(!!e)}
-                    />
-                    <label htmlFor="show_intermediate_steps" className="text-sm">
-                      Show intermediate steps
-                    </label>
-                  </div>
-                )}
               </ChatInput>
             </>
           }

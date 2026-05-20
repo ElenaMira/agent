@@ -18,7 +18,8 @@ const structuredModel = baseModel.withStructuredOutput(schema, {
   name: "output_formatter",
 });
 
-const formatOutput = async (input: any) => {
+export const formatOutput = async (input: any) => {
+  console.log("input",input);
   return structuredModel.invoke(input);
 }
 

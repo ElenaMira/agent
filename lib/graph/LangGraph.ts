@@ -1,17 +1,17 @@
-import { AIMessage, BaseMessage } from "@langchain/core/messages";
+import { AIMessage, BaseMessage, SystemMessage } from "@langchain/core/messages";
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { Annotation } from "@langchain/langgraph";
 
 // 假设这些工具和构建函数已正确导入
 import { condenseQuestionLogic, CondenseQuestionTool } from "../tools/CondenseQuestionTool";
 import { ragQueryLogic, RagQueryTool } from "../tools/RagTool";
-import { buildExecutionAgent } from "./ExecutionAgent"; // 假设这个函数返回一个 LangChain RunnableAgent
+import { buildExecutionAgent } from "../agent/ExecutionAgent"; // 假设这个函数返回一个 LangChain RunnableAgent
 import { imageAnalysisLogic } from "../tools/VisionTool";
 import { generateImageFunc } from "../tools/GenerateImageTool";
 import { searchTrendsLogic } from "../tools/SearchTool";
 import { generateFinalCopyLogic } from "../tools/generateFinalCopyLogic";
 
-// 定义图的状态结构 (保持不变)
+// 定义图的状态结构
 export const AgentState = Annotation.Root({
     // 原始消息和历史记录
     messages: Annotation<BaseMessage[]>,
@@ -31,10 +31,59 @@ export const AgentState = Annotation.Root({
     generated_image_url: Annotation<string>,
     // 搜索趋势结果
     search_trends_result: Annotation<string>,
-});
+  });
+  
 
 // 定义 StateGraph 的参数类型 (保持不变)
 export type StateType = typeof AgentState.State;
+
+function isSystemMessage(message: BaseMessage) {
+  return (
+    message instanceof SystemMessage ||
+    (typeof (message as any).getType === "function" &&
+      (message as any).getType() === "system") ||
+    (message as any).role === "system"
+  );
+}
+
+function getSystemPrompt(messages: BaseMessage[]) {
+  const firstMessage = messages[0];
+  if (!firstMessage || !isSystemMessage(firstMessage)) {
+    return "";
+  }
+
+  return typeof firstMessage.content === "string"
+    ? firstMessage.content
+    : JSON.stringify(firstMessage.content);
+}
+
+function getConversationMessages(messages: BaseMessage[]) {
+  if (messages.length === 0) return [];
+  return isSystemMessage(messages[0]) ? messages.slice(1) : messages;
+}
+
+function extractFinalOutput(messages: BaseMessage[]) {
+  const lastMessage = [...messages]
+    .reverse()
+    .find((message) => !isSystemMessage(message));
+
+  if (!lastMessage) return "";
+
+  if (typeof lastMessage.content === "string") {
+    return lastMessage.content;
+  }
+
+  if (Array.isArray(lastMessage.content)) {
+    return lastMessage.content
+      .map((part: any) => {
+        if (part?.type === "text") return part.text ?? "";
+        return "";
+      })
+      .join("\n");
+  }
+
+  return String(lastMessage.content ?? "");
+}
 
 /**
  * 核心：LangGraph 工作流构建和运行函数
@@ -49,11 +98,15 @@ export async function runRagAgentGraph() { // initialState 可能会在 invoke �
     // RAG 链节点 1: 浓缩问题
     workflow.addNode("condense_question", async (state: StateType) => {
         console.log("-> Executing CondenseQuestionTool");
-        // 1. 传入 LangGraph 状态中的 messages
+        const conversationMessages = getConversationMessages(state.messages);
         const { standalone_question } = await condenseQuestionLogic({
-            messages: state.messages,
+            messages: conversationMessages.map((message: any) => ({
+                role: message.getType?.() ?? message.role ?? "message",
+                content: typeof message.content === "string"
+                  ? message.content
+                  : JSON.stringify(message.content),
+            })),
         });
-        // 返回状态更新：设置 standalone_question
         return { standalone_question: standalone_question };
     });
     // RAG 链节点 2: RAG 查询
@@ -75,26 +128,24 @@ export async function runRagAgentGraph() { // initialState 可能会在 invoke �
     // 核心执行节点: ReAct Agent
     workflow.addNode("agent", async (state: StateType) => {
         console.log("-> Executing Core ReAct Agent");
-        
-        // 1. 构建 Agent (这里假设 Agent 内部会处理 combined_context)
-        const agentExecutor = await buildExecutionAgent(state.selectedTools);
+        const systemPrompt = getSystemPrompt(state.messages);
+        const conversationMessages = getConversationMessages(state.messages);
+        const agentExecutor = await buildExecutionAgent(
+          state.selectedTools,
+          systemPrompt,
+        );
 
-        // 2. 调用 Agent，传入当前所有消息
         const result = await agentExecutor.invoke({
-            messages: state.messages,
-            // 注意：agentExecutor 内部的 Prompt 需自行读取 state.combined_context
+          messages: conversationMessages,
         });
-        
-        // 3. 处理 Agent 的输出
-        // 假设 LangChain Agent Executor 的输出结构是 { output: string } 或 { final_answer: AgentFinish }
-        // ⚠️ 需要根据您 buildExecutionAgent 的实际返回类型来调整 result 的提取方式
-        const finalOutput = (result as any).output || (result as any).final_output;
 
-        // 4. 返回状态更新
+        const nextMessages = Array.isArray((result as any).messages)
+          ? ([...state.messages.slice(0, 1), ...(result as any).messages] as BaseMessage[])
+          : state.messages;
+
         return { 
-            final_output: finalOutput,
-            // 确保将 Agent 的最终回复添加到消息历史中，以便下一轮对话使用（如果Agent本身没有处理）
-            // messages: [...state.messages, new AIMessage(finalOutput)] // 假设 finalOutput 是字符串
+            messages: nextMessages,
+            final_output: extractFinalOutput(nextMessages),
         };
     });
 
